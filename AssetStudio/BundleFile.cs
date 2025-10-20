@@ -653,6 +653,50 @@ namespace AssetStudio
                                 break;
 
                             }
+
+                            if (Game.Type.IsGGZ2())
+                            {
+                                var compressedBytesSpan = compressedBytes.AsSpan(0, compressedSize);
+                                var uncompressedBytesSpan = uncompressedBytes.AsSpan(0, uncompressedSize);
+
+                                reader.Read(compressedBytesSpan);
+                                var cipher = Aes.Create();
+                                cipher.Padding = PaddingMode.PKCS7;
+                                cipher.Key = new byte[]
+                                {
+                                    0x72, 0xE6, 0x5D, 0xAC, 0xA5, 0xB7, 0x9B, 0x2A,
+                                    0x42, 0x8E, 0x7F, 0x64, 0xC1, 0xA4, 0x0A, 0x9E
+                                };
+                                var ivObfuscation = new byte[]
+                                {
+                                    0x8C, 0xA1, 0x89, 0x0D, 0xBF, 0xE6, 0x42, 0x68,
+                                    0x41, 0x99, 0x2D, 0x0F, 0xB0, 0x54, 0xBB, 0x16
+                                };
+                                var tailOffset = compressedBytesSpan.Length - 16;
+                                var tailData = compressedBytesSpan[tailOffset..];
+                                var iv = new byte[16];
+                                for (var j = 0; j < 16; j++)
+                                {
+                                    iv[j] = (byte)(tailData[j] ^ ivObfuscation[j]);
+                                }
+
+                                var dataLen = compressedBytesSpan.Length - 16;
+                                compressedBytesSpan = compressedBytesSpan[..dataLen];
+
+                                var dec = cipher.DecryptCbc(compressedBytesSpan, iv);
+                                compressedBytesSpan = compressedBytesSpan[..dec.Length];
+                                dec.CopyTo(compressedBytesSpan);
+                                var numWrite = LZ4.Instance.Decompress(compressedBytesSpan, uncompressedBytesSpan);
+                                if (numWrite != uncompressedSize)
+                                {
+                                    throw new IOException(
+                                        $"Lz4 decompression error, write {numWrite} bytes but expected {uncompressedSize} bytes");
+                                }
+
+                                blocksStream.Write(uncompressedBytesSpan);
+                                break;
+                            }
+
                             try
                             {
                                 var compressedBytesSpan = compressedBytes.AsSpan(0, compressedSize);
