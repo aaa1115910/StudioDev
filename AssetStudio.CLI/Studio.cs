@@ -258,7 +258,9 @@ namespace AssetStudio.CLI
                 {
                     if (pptr.TryGet(out var obj))
                     {
-                        objectAssetItemDic[obj].Container = container;
+                        // Several containers may resolve to the same asset; see SelectContainer.
+                        var entry = objectAssetItemDic[obj];
+                        entry.Container = AssetsHelper.SelectContainer(entry.Container, container);
                     }
                 }
                 containers.Clear();
@@ -327,13 +329,10 @@ namespace AssetStudio.CLI
                 case AssetBundle m_AssetBundle:
                     foreach (var m_Container in m_AssetBundle.m_Container)
                     {
-                        var preloadIndex = m_Container.Value.preloadIndex;
-                        var preloadSize = m_Container.Value.preloadSize;
-                        var preloadEnd = preloadIndex + preloadSize;
-                        for (int k = preloadIndex; k < preloadEnd; k++)
-                        {
-                            containers.Add((m_AssetBundle.m_PreloadTable[k], m_Container.Key));
-                        }
+                        // Map the container to its primary asset only; expanding the
+                        // preload table mis-assigns assets shared by several containers.
+                        // See AssetsHelper.SelectContainer for the details.
+                        containers.Add((m_Container.Value.asset, m_Container.Key));
                     }
 
                     exportable = ClassIDType.AssetBundle.CanExport();
