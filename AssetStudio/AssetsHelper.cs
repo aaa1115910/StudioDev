@@ -495,7 +495,7 @@ namespace AssetStudio
         private static void BuildAssetMap(string file, List<AssetEntry> assets, ClassIDType[] typeFilters = null, Regex[] nameFilters = null, Regex[] containerFilters = null)
         {
             var matches = new List<AssetEntry>();
-            var containers = new List<(PPtr<Object>, string)>();
+            var containers = new List<(PPtr<Object>, string, bool)>();
             var mihoyoBinDataNames = new List<(PPtr<Object>, string)>();
             var objectAssetItemDic = new Dictionary<Object, AssetEntry>();
             var animators = new List<(PPtr<Object>, AssetEntry)>();
@@ -527,15 +527,27 @@ namespace AssetStudio
                                 var assetBundle = new AssetBundle(objectReader);
                                 foreach (var m_Container in assetBundle.m_Container)
                                 {
-                                    // Map the container to its primary asset only.
+                                    // Two kinds of relation, kept apart on purpose:
                                     //
-                                    // Prefer m_Container.Value.asset over the preload table: the
-                                    // preload range is a *dependency list*, not "what this
-                                    // container defines". Expanding it assigned the same container
-                                    // path to every dependency, so an asset pulled in by several
-                                    // containers ended up under whichever one came last.
-                                    // See SelectContainer for the details.
-                                    containers.Add((m_Container.Value.asset, m_Container.Key));
+                                    //   primary   - m_Container.Value.asset declares "this
+                                    //               container provides that asset". It is the
+                                    //               asset's own home.
+                                    //   dependent - everything in the preload range is merely
+                                    //               *needed* by that container (materials,
+                                    //               effect textures, scripts...). Useful as a
+                                    //               fallback, but it must never override a
+                                    //               primary assignment.
+                                    //
+                                    // Mixing the two is what put shared assets (a portrait
+                                    // claimed by an effect prefab, say) under a referencing
+                                    // container's path instead of their own.
+                                    containers.Add((m_Container.Value.asset, m_Container.Key, true));
+
+                                    var preloadEnd = m_Container.Value.preloadIndex + m_Container.Value.preloadSize;
+                                    for (var k = m_Container.Value.preloadIndex; k < preloadEnd; k++)
+                                    {
+                                        containers.Add((assetBundle.m_PreloadTable[k], m_Container.Key, false));
+                                    }
                                 }
 
                                 obj = null;
@@ -670,13 +682,17 @@ namespace AssetStudio
                     else asset.Name = $"BinFile #{asset.PathID}";
                 }
             }
-            foreach ((var pptr, var container) in containers)
+            foreach ((var pptr, var container, var isPrimary) in containers)
             {
                 if (pptr.TryGet(out var obj))
                 {
-                    // Several containers may resolve to the same asset; see SelectContainer.
                     var entry = objectAssetItemDic[obj];
-                    entry.Container = SelectContainer(entry.Container, container);
+                    if (!isPrimary && entry.IsContainerFromPrimary)
+                    {
+                        continue;   // a primary assignment always outranks a reference
+                    }
+                    entry.Container = container;
+                    entry.IsContainerFromPrimary = isPrimary;
                 }
             }
 
@@ -687,29 +703,6 @@ namespace AssetStudio
                 var isContainerMatch = containerFilters.IsNullOrEmpty() || containerFilters.Any(y => y.IsMatch(x.Container));
                 return isMatchRegex && isFilteredType && isContainerMatch;
             }));
-        }
-
-        /// <summary>
-        /// Picks which container to keep when several ones resolve to the same asset.
-        /// </summary>
-        /// <remarks>
-        /// Containers and assets are many-to-many, not one-to-one: an asset can serve
-        /// as its own container entry while also being pulled in as a dependency of
-        /// unrelated containers (prefabs, effects, other scenes). This used to be a
-        /// plain last-write-wins assignment, so the container an asset ended up with
-        /// depended on the order <c>m_Container</c> happened to be enumerated in.
-        /// Depending on that order, exports landed under a referencing container's
-        /// path instead of the asset's own.
-        ///
-        /// Collecting only <c>m_Container.Value.asset</c> (each container's primary
-        /// asset) at the call site removes nearly all of this contention, so keeping
-        /// the first assignment is enough here. Do not add heuristics to pick a
-        /// "better" path: which container is authoritative is not recoverable from
-        /// path shape or asset names, and guessing reintroduces the misplacement.
-        /// </remarks>
-        public static string SelectContainer(string current, string candidate)
-        {
-            return string.IsNullOrEmpty(current) ? candidate : current;
         }
 
         public static string[] ParseAssetMap(string mapName, ExportListType mapType, ClassIDType[] typeFilter, Regex[] nameFilter, Regex[] containerFilter)

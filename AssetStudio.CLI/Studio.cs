@@ -230,7 +230,7 @@ namespace AssetStudio.CLI
         {
             var objectAssetItemDic = new Dictionary<Object, AssetItem>();
             var mihoyoBinDataNames = new List<(PPtr<Object>, string)>();
-            var containers = new List<(PPtr<Object>, string)>();
+            var containers = new List<(PPtr<Object>, string, bool)>();
             var tex2dArrayAssetList = new List<AssetItem>();
             foreach (var assetsFile in assetsManager.assetsFileList)
             {
@@ -254,13 +254,17 @@ namespace AssetStudio.CLI
             }
             if (!SkipContainer)
             {
-                foreach ((var pptr, var container) in containers)
+                foreach ((var pptr, var container, var isPrimary) in containers)
                 {
                     if (pptr.TryGet(out var obj))
                     {
-                        // Several containers may resolve to the same asset; see SelectContainer.
                         var entry = objectAssetItemDic[obj];
-                        entry.Container = AssetsHelper.SelectContainer(entry.Container, container);
+                        if (!isPrimary && entry.IsContainerFromPrimary)
+                        {
+                            continue;   // a primary assignment always outranks a reference
+                        }
+                        entry.Container = container;
+                        entry.IsContainerFromPrimary = isPrimary;
                     }
                 }
                 containers.Clear();
@@ -291,7 +295,7 @@ namespace AssetStudio.CLI
             tex2dArrayAssetList.Clear();
         }
 
-        public static void ProcessAssetData(Object asset, Dictionary<Object, AssetItem> objectAssetItemDic, List<(PPtr<Object>, string)> mihoyoBinDataNames, List<(PPtr<Object>, string)> containers, List<AssetItem> tex2dArrayAssetList,ref int i)
+        public static void ProcessAssetData(Object asset, Dictionary<Object, AssetItem> objectAssetItemDic, List<(PPtr<Object>, string)> mihoyoBinDataNames, List<(PPtr<Object>, string, bool)> containers, List<AssetItem> tex2dArrayAssetList,ref int i)
         {
             var assetItem = new AssetItem(asset);
             objectAssetItemDic.Add(asset, assetItem);
@@ -329,10 +333,16 @@ namespace AssetStudio.CLI
                 case AssetBundle m_AssetBundle:
                     foreach (var m_Container in m_AssetBundle.m_Container)
                     {
-                        // Map the container to its primary asset only; expanding the
-                        // preload table mis-assigns assets shared by several containers.
-                        // See AssetsHelper.SelectContainer for the details.
-                        containers.Add((m_Container.Value.asset, m_Container.Key));
+                        // Record the primary relation and the dependency relations apart,
+                        // so a referencing container can never override the asset's own
+                        // home. See AssetsHelper.BuildAssetMap for the full explanation.
+                        containers.Add((m_Container.Value.asset, m_Container.Key, true));
+
+                        var preloadEnd = m_Container.Value.preloadIndex + m_Container.Value.preloadSize;
+                        for (var k = m_Container.Value.preloadIndex; k < preloadEnd; k++)
+                        {
+                            containers.Add((m_AssetBundle.m_PreloadTable[k], m_Container.Key, false));
+                        }
                     }
 
                     exportable = ClassIDType.AssetBundle.CanExport();
@@ -348,7 +358,8 @@ namespace AssetStudio.CLI
                 case ResourceManager m_ResourceManager:
                     foreach (var m_Container in m_ResourceManager.m_Container)
                     {
-                        containers.Add((m_Container.Value, m_Container.Key));
+                        // ResourceManager lists what it provides, so this is a primary relation.
+                        containers.Add((m_Container.Value, m_Container.Key, true));
                     }
 
                     exportable = ClassIDType.GameObject.CanExport();

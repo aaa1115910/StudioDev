@@ -46,6 +46,15 @@ namespace AssetStudio
         [Key(4)]
         public ClassIDType Type { get; set; }
 
+        /// <summary>
+        /// True when <see cref="Container"/> came from a container that declares this
+        /// asset as its primary asset, rather than from one that merely references it.
+        /// A primary assignment must not be overwritten by a referencing container.
+        /// Not serialized: it only matters while building the map.
+        /// </summary>
+        [IgnoreMember]
+        public bool IsContainerFromPrimary { get; set; }
+
         public bool Matches(Dictionary<string, Regex> filters)
         {
             var matches = new List<bool>();
